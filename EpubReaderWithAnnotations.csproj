@@ -65,6 +65,7 @@
     </Compile>
     <Compile Include="BookData.cs" />
     <Compile Include="BrowserOperations.cs" />
+    <Compile Include="TextSearch.cs" />
     <Compile Include="Utilities\FileZipper.cs" />
     <Page Include="AnnotationEdit.xaml">
       <SubType>Designer</SubType>

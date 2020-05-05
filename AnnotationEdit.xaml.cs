@@ -383,7 +383,8 @@ namespace EpubReaderWithAnnotations
 
         private string [] textIntoWords (string s)
         {
-            string regExExpression = @"([\p{L}’]+)|([\p{P}]+)";
+            //string regExExpression = @"([\p{L}’]+)|([\p{P}]+)";
+            string regExExpression = @"([\p{L}’]+\s*)|([\p{P}]+\s*)";
             int ind = 0;
             MatchCollection mc = Regex.Matches(s, regExExpression);
             string[] result = new string[mc.Count];
@@ -426,7 +427,7 @@ namespace EpubReaderWithAnnotations
 
         private Run NewWordToTextblock(string word, string backgournd, bool underlined)
         {
-            Run r = new Run(word + " ")
+            Run r = new Run(word)
             {
                 Background = (Brush)bc.ConvertFrom(backgournd)
             };

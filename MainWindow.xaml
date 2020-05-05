@@ -10,6 +10,9 @@
                     <Separator />
                     <MenuItem Header="Exit" Click="Exit_Click" />
                 </MenuItem>
+                <MenuItem Header="_Search">
+                    <MenuItem Header="_Test" Click="TestSearch"></MenuItem>
+                </MenuItem>
             </Menu>
 
             <ListBox Name ="AnnotBox" SelectionChanged ="AnnotBox_SelectionChanged" DockPanel.Dock="Right">

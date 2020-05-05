@@ -29,20 +29,32 @@ namespace EpubReaderWithAnnotations
         private static string[][] mainCategories;
         private static string[][] subCategories;
         private static AnnotationEdit editWindow = new AnnotationEdit();
+        private string bookAuthor, bookTitle, bookLanguage;
         private static BookData book;
         private BrowserOperations browser;
         private string _tempPath; // library dir
         private string _baseMenuXmlDiretory;
         private List<string> _menuItems; //book chapters?
+        private string[] bookFileNames; // same as the list but as array, for testing only
         private int _currentPage;
         private XDocument bookAnnotes;
         private List<XElement>[] annotesByChapter;
         private IEnumerable<XElement> chapterAnnotes;
-        private List<IHTMLElement> initialColl;
+        private List<IHTMLElement> initialColl; //collection of tags for one chapter
+        private List<string>[] fullBookText;
+        private bool inBrowseMode = false;
+        private int browsingStart = 0;
+        private int browsingFinish = 0;
+        private int currentlyBrowsing = 0;
         private int _listBoxPrevInd = -1;
+        private bool pageLoaded = false;
         private HTMLDocumentEvents2_Event _docEvent;
         private IHTMLDocument2 docOrg;
         bool isAssigned = false;
+
+        public string BookAuthor { get; }
+        public string BookTitle { get; }
+        public string BookLanguage { get; }
 
         public MainWindow()
         {
@@ -67,7 +79,7 @@ namespace EpubReaderWithAnnotations
                 annotesByChapter[_currentPage] = editWindow.NewAnnotes;
                 epubDisplay.Navigate(GetPath(_currentPage));
             };
-            _menuItems = new List<string>();//book chapters?
+            _menuItems = new List<string>();//book chapters - filenames
             NextButton.Visibility = Visibility.Hidden;
             PreviousButton.Visibility = Visibility.Hidden;
             annotCategories = XElement.Load("categories.xml");
@@ -196,12 +208,20 @@ namespace EpubReaderWithAnnotations
                 XDocument menuReader = XDocument.Load(Path.Combine(_tempPath, baseMenuXmlPath));
                 _baseMenuXmlDiretory = Path.GetDirectoryName(baseMenuXmlPath);
                 XNamespace ns = menuReader.Root.Name.Namespace;
+                XNamespace dc = menuReader.Root.GetNamespaceOfPrefix("dc");
+                XElement metadata = menuReader.Root.Element(ns+"metadata");
+                string autor=metadata.Element(dc+"creator").Value;
+                string title=metadata.Element(dc+"title").Value;
+                string language = metadata.Element(dc + "language").Value;
                 var menuItemsIds = menuReader.Root.Element(ns + "spine").Descendants().Select(x => x.Attribute("idref").Value).ToList();
                 _menuItems = menuReader.Root.Element(ns + "manifest").Descendants().Where(mn => menuItemsIds.Contains(mn.Attribute("id").Value)).Select(mn => mn.Attribute("href").Value).ToList();
                 _currentPage = 0;
+                bookFileNames = _menuItems.ToArray();
                 string uri = GetPath(0);
                 bookAnnotes = XDocument.Load("Kevade.xml");
                 annotesByChapter=divideAnnotesByChapter();
+                browsingFinish = annotesByChapter.Length - 1;
+                fullBookText = new List<String>[annotesByChapter.Length];
                 epubDisplay.Navigate(uri);
                 NextButton.Visibility = Visibility.Visible;
             }
@@ -257,8 +277,7 @@ namespace EpubReaderWithAnnotations
 
                 PreviousButton.Visibility = Visibility.Visible;
             }
-            string uri = GetPath(_currentPage);
-            epubDisplay.Navigate(uri);
+            NavigateToPage(_currentPage);
         }
 
         private void PreviousButton_Click(object sender, RoutedEventArgs e)
@@ -280,8 +299,59 @@ namespace EpubReaderWithAnnotations
             {
                 NextButton.Visibility = Visibility.Visible;
             }
-            string uri = GetPath(_currentPage);
-            epubDisplay.Navigate(uri);
+            NavigateToPage(_currentPage);
+        }
+
+        private void NavigateToPage (int i)
+        {
+            pageLoaded = false;
+            epubDisplay.Navigate(GetPath(i));
+        }
+
+        private async void BrowseBook()
+        {
+            inBrowseMode = true;
+            for (currentlyBrowsing = browsingStart; currentlyBrowsing <= browsingFinish; currentlyBrowsing++)
+                if (fullBookText[currentlyBrowsing] == null)
+                {
+                    NavigateToPage(currentlyBrowsing);
+                    await PageLoad();
+                }
+            inBrowseMode = false;
+            NavigateToPage(_currentPage);
+            TextSearch.searchText(fullBookText, bookFileNames);
+        }
+
+        private List<string> getTextFromPage (List<IHTMLElement> webPage)
+        {
+            List<string> result = new List<string>();
+
+            foreach (IHTMLElement element in webPage)
+                result.Add(element.innerText);
+            return result;
+
+        }
+
+
+
+        
+
+        private async Task PageLoad()
+        {
+            TaskCompletionSource<bool> PageLoaded = null;
+            PageLoaded = new TaskCompletionSource<bool>();
+            epubDisplay.LoadCompleted += (s, e) =>
+            {
+                if (!pageLoaded) return; //if not complete
+                if (PageLoaded.Task.IsCompleted) return;
+                PageLoaded.SetResult(true);
+            };
+
+            while (PageLoaded.Task.Status != TaskStatus.RanToCompletion)
+            {
+                await Task.Delay(10);
+
+            }
         }
 
         private void OpenEditWindow (object sender, RoutedEventArgs e)
@@ -422,7 +492,7 @@ namespace EpubReaderWithAnnotations
             return listByChapter;
         }
 
-        private List<IHTMLElement> getListOfElements(IHTMLDocument2 document)
+        private List<IHTMLElement> getListOfElements(IHTMLDocument2 document, string tag = "")
         {
             IHTMLElement e;
             IHTMLElementCollection coll = document.all;
@@ -431,7 +501,8 @@ namespace EpubReaderWithAnnotations
             for (int i = 0; i < coll.length; i++)
             {
                 e = coll.item(i);
-                fullList.Add(e);
+                if (e.tagName==tag || tag=="")
+                    fullList.Add(e);
 
             }
             return fullList;
@@ -512,11 +583,26 @@ namespace EpubReaderWithAnnotations
         {
             
             IHTMLDocument2 document = epubDisplay.Document as IHTMLDocument2;
-            docOrg = epubDisplay.Document as IHTMLDocument2;
-            initialColl = getListOfElements(document);
-            _listBoxPrevInd = -1;
-            markAnnotations(document);
-            _listBoxPrevInd = -1;
+            int pageIndex;
+            if (inBrowseMode)
+                pageIndex = currentlyBrowsing;
+            else
+                pageIndex = _currentPage;
+            initialColl = getListOfElements(document, "P");
+            //docOrg = epubDisplay.Document as IHTMLDocument2;
+            if (fullBookText[pageIndex] == null)
+            {
+                
+                fullBookText[pageIndex] = getTextFromPage(initialColl);
+            }
+            
+            if (!inBrowseMode)
+            {
+                _listBoxPrevInd = -1;
+                markAnnotations(document);
+                _listBoxPrevInd = -1;
+            }
+            pageLoaded=true;
             
         }
 
@@ -553,6 +639,12 @@ namespace EpubReaderWithAnnotations
         private void MenuItem_Click(object sender, RoutedEventArgs e)
         {
 
+        }
+
+        private void TestSearch(object sender, RoutedEventArgs e)
+        {
+            BrowseBook();
+            
         }
     }
 }
