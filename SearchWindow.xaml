@@ -1,0 +1,20 @@
+﻿<Window x:Class="EpubReaderWithAnnotations.SearchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:EpubReaderWithAnnotations"
+        mc:Ignorable="d"
+        Title="SearchWindow" Height="450" Width="800">
+    <Grid>
+        <Label Content="Text search
+               " HorizontalAlignment="Left" VerticalAlignment="Top" Margin="27,28,0,0"/>
+        <TextBox x:Name="textQuery" HorizontalAlignment="Left" Height="23" TextWrapping="Wrap" Text="" VerticalAlignment="Top" Width="428" Margin="153,31,0,0"/>
+        <Label Content="Search grammar" HorizontalAlignment="Left" VerticalAlignment="Bottom" RenderTransformOrigin="1.474,2.731" Margin="37,0,0,304"/>
+        <ListBox x:Name="GrammarType"  HorizontalAlignment="Left" Height="35" VerticalAlignment="Top" Width="200" Margin="153,97,0,0" SelectionChanged="GrammarType_SelectionChanged"/>
+        <ListBox x:Name="GrammarCategory" HorizontalAlignment="Left" Height="35" VerticalAlignment="Top" Width="200" Margin="381,97,0,0"/>
+        <Button Content="OK" HorizontalAlignment="Left" VerticalAlignment="Top" Width="75" Margin="226,212,0,0" Click="Button_Click"/>
+        <Button Content="Cancel" HorizontalAlignment="Left" VerticalAlignment="Top" Width="75" Margin="409,212,0,0" Click="Button_Click_1"/>
+
+    </Grid>
+</Window>
