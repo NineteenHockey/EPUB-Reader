@@ -1,6 +1,7 @@
 ﻿using Microsoft.Win32;
 using EpubReaderWithAnnotations.Utilities;
 using System;
+using System.ComponentModel;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -25,11 +26,14 @@ namespace EpubReaderWithAnnotations
     /// </summary>
     public partial class MainWindow : Window
     {
+        private const string neutralColor = "#FFFF00";
         private static XElement annotCategories;
         private static string[][] mainCategories;
         private static string[][] subCategories;
         private static AnnotationEdit editWindow = new AnnotationEdit();
-        private string bookAuthor, bookTitle, bookLanguage;
+        private static SearchWindow searchWindow;
+        //private string bookAuthor, bookTitle, bookLanguage;
+        string[] bookData;
         private static BookData book;
         private BrowserOperations browser;
         private string _tempPath; // library dir
@@ -37,48 +41,64 @@ namespace EpubReaderWithAnnotations
         private List<string> _menuItems; //book chapters?
         private string[] bookFileNames; // same as the list but as array, for testing only
         private int _currentPage;
-        private XDocument bookAnnotes;
+        private XDocument currentAnnotes,bookAnnotes;
+        private XDocument nounsFile, verbsFile,excFile;
+        private List<string> exclusions;
+        private bool isBookAnnotes; //otherwise isGrammarAnnotes
+        private bool bookAnnotesChanged;
         private List<XElement>[] annotesByChapter;
         private IEnumerable<XElement> chapterAnnotes;
         private List<IHTMLElement> initialColl; //collection of tags for one chapter
         private List<string>[] fullBookText;
+        private string currentLanguage = null;
+        private string mainQuery;
+        private string doubtQuery;
         private bool inBrowseMode = false;
         private int browsingStart = 0;
         private int browsingFinish = 0;
         private int currentlyBrowsing = 0;
         private int _listBoxPrevInd = -1;
         private bool pageLoaded = false;
+        private bool searchOn = false;
+        private bool annotationsShown = true;
+        private string searchItem;
+        private XDocument searchResult;
         private HTMLDocumentEvents2_Event _docEvent;
         private IHTMLDocument2 docOrg;
         bool isAssigned = false;
+        BackgroundWorker searcher;
 
-        public string BookAuthor { get; }
-        public string BookTitle { get; }
-        public string BookLanguage { get; }
 
+        
         public MainWindow()
         {
             InitializeComponent();
+            setSearcher();
+            
             epubDisplay.LoadCompleted += delegate
             {
                 if (_docEvent != null /* && !isAssigned -- not needed?? */)
                 {
                     _docEvent.ondblclick -= _docEvent_ondblclick;
+                    _docEvent.oncontextmenu -= _docEvent_oncontextmenu;
 
                 }
                 if (epubDisplay.Document != null)
                 {
                     _docEvent = (HTMLDocumentEvents2_Event)epubDisplay.Document;
                     _docEvent.ondblclick += _docEvent_ondblclick;
+                    _docEvent.oncontextmenu += _docEvent_oncontextmenu;
                     
                 }
-            };
+            }; 
 
             editWindow.AnnotationChangesConfirmed += (s, e) =>
             {
                 annotesByChapter[_currentPage] = editWindow.NewAnnotes;
                 epubDisplay.Navigate(GetPath(_currentPage));
             };
+
+            
             _menuItems = new List<string>();//book chapters - filenames
             NextButton.Visibility = Visibility.Hidden;
             PreviousButton.Visibility = Visibility.Hidden;
@@ -88,6 +108,59 @@ namespace EpubReaderWithAnnotations
             //string[] subCats = getSubCategories("Dictionary");
             //int i = 444;
             
+        }
+
+        bool _docEvent_oncontextmenu (IHTMLEventObj pEvtObj)
+        {
+            WbShowContextMenu();
+            return false;
+        }
+
+        private void toggleMenuItem (object menuItem, bool value, int subNr=0)
+        {
+            MenuItem item = (MenuItem)menuItem;
+            item.IsEnabled = value;
+        }
+        public void WbShowContextMenu()
+        {
+            ContextMenu cm = FindResource("MenuCustom") as ContextMenu;
+            if (cm == null) return;
+            MenuItem first = (MenuItem)cm.Items.GetItemAt(0);
+            toggleMenuItem(first.Items.GetItemAt(0), isBookAnnotes);
+            toggleMenuItem(first.Items.GetItemAt(1), isBookAnnotes);
+            toggleMenuItem(first.Items.GetItemAt(2), isBookAnnotes);
+            toggleMenuItem(first.Items.GetItemAt(3), isBookAnnotes);
+            toggleMenuItem(first.Items.GetItemAt(4), !isBookAnnotes);
+            toggleMenuItem(cm.Items.GetItemAt(3), !isBookAnnotes);
+
+            cm.PlacementTarget = epubDisplay;
+            cm.IsOpen = true;
+        }
+
+        private void setSearcher ()
+        {
+            searcher = new BackgroundWorker();
+            searcher.WorkerReportsProgress = true;
+            searcher.DoWork += searcherDoWork;
+            searcher.ProgressChanged += searcherProgressChanged;
+            searcher.RunWorkerCompleted += searcherRunWorkerCompleted;
+        }
+
+        void searcherDoWork(object sender, DoWorkEventArgs e)
+        {
+            TextSearch.searchText(fullBookText, bookData, _baseMenuXmlDiretory, bookFileNames,mainQuery,doubtQuery,exclusions);
+        }
+
+        void searcherProgressChanged(object sender, ProgressChangedEventArgs e)
+        {
+
+        }
+
+        void searcherRunWorkerCompleted(object sender, RunWorkerCompletedEventArgs e)
+        {
+            currentAnnotes = TextSearch.SearchResult;
+            annotesByChapter = divideAnnotesByChapter();
+            NavigateToPage(_currentPage);
         }
 
         private static string[][] readCategoryList ()
@@ -146,6 +219,42 @@ namespace EpubReaderWithAnnotations
 
         }
 
+        private void certainTextSearch(string s)
+        {
+            IHTMLTxtRange range = getRange();
+            IHTMLTxtRange first = null;
+            bool running = true;
+            while (running)
+            {
+                if (range.findText(s, s.Length, 0))
+                {
+                    if (range != first)
+                    {
+                        
+                        range.execCommand("BackColor", false, "#42f5b9");
+                    }
+                    else if (first != null)
+                    {
+                        running = false;
+                        
+                    }
+                    if (first == null)
+                    {
+                        first = range.duplicate();
+                    }
+                    else
+                    {
+                        range.moveStart("character");
+                    }
+
+
+
+                }
+                else running = false;
+
+            }
+        }
+
         private  void saveAnnotesToFile(string path)
         {
             XElement root = new XElement("annotations");
@@ -181,6 +290,41 @@ namespace EpubReaderWithAnnotations
             return false;
         }
 
+        private void loadLanguageFiles (string language)
+        {
+            excFile = XDocument.Load(currentLanguage + ".ex");
+            nounsFile = XDocument.Load(currentLanguage + ".noun");
+            verbsFile = XDocument.Load(currentLanguage + ".verb");
+        }
+
+        private void addWordsToLanguageFile(XDocument doc, string word)
+        {
+            if (word == null)
+                return;
+            word = word.ToLower();
+            List<string> l = doc.Descendants("word")
+                .Where(c => c.Value == word)
+                .Select(item => item.Value)
+                .ToList();
+            if (l.Count == 0)
+            {
+                XElement el = new XElement("word");
+                el.Value = word;
+                doc.Root.Add(el);
+            }
+        }
+
+        private XDocument createEmptyAnnotDocument ()
+        {
+            XAttribute bAuthor = new XAttribute("author", bookData[0]);
+            XAttribute bTitle = new XAttribute("title", bookData[1]);
+            XAttribute bLanguage = new XAttribute("language", bookData[2]);
+            XAttribute anType = new XAttribute("type", "book");
+            XElement root = new XElement("annotations", bAuthor, bTitle, bLanguage,anType);
+            return new XDocument(root);
+        }
+
+
         private void btnOpenFile_Click(object sender, RoutedEventArgs e)
         {
             OpenFileDialog openFileDialog = new OpenFileDialog();
@@ -210,21 +354,53 @@ namespace EpubReaderWithAnnotations
                 XNamespace ns = menuReader.Root.Name.Namespace;
                 XNamespace dc = menuReader.Root.GetNamespaceOfPrefix("dc");
                 XElement metadata = menuReader.Root.Element(ns+"metadata");
-                string autor=metadata.Element(dc+"creator").Value;
+                string author=metadata.Element(dc+"creator").Value;
                 string title=metadata.Element(dc+"title").Value;
                 string language = metadata.Element(dc + "language").Value;
+                if (language!=currentLanguage)
+                {
+                    currentLanguage = language;
+                    loadLanguageFiles(language);
+                    
+                }
+                searchWindow = getSearchWindow(language);
+                bookData = new string[] { author, title, language };
+
                 var menuItemsIds = menuReader.Root.Element(ns + "spine").Descendants().Select(x => x.Attribute("idref").Value).ToList();
                 _menuItems = menuReader.Root.Element(ns + "manifest").Descendants().Where(mn => menuItemsIds.Contains(mn.Attribute("id").Value)).Select(mn => mn.Attribute("href").Value).ToList();
                 _currentPage = 0;
                 bookFileNames = _menuItems.ToArray();
                 string uri = GetPath(0);
-                bookAnnotes = XDocument.Load("Kevade.xml");
+                string annotFileName = fileName + ".xml";
+                if (File.Exists(annotFileName))
+                    bookAnnotes = XDocument.Load(fileName + ".xml");
+                else
+                    bookAnnotes = createEmptyAnnotDocument();
+                currentAnnotes = bookAnnotes;
+                isBookAnnotes = checkCurrentAnnotesType();
+                
                 annotesByChapter=divideAnnotesByChapter();
                 browsingFinish = annotesByChapter.Length - 1;
                 fullBookText = new List<String>[annotesByChapter.Length];
                 epubDisplay.Navigate(uri);
                 NextButton.Visibility = Visibility.Visible;
             }
+        }
+
+        private bool checkCurrentAnnotesType ()
+        {
+            if (currentAnnotes.Root.Attribute("type").Value=="book")
+                return true;
+            else
+                return false;
+        }
+
+        private bool isElementDoubt (XElement el)
+        {
+            if (el.Element("category").Value=="Doubt")
+                return true;
+            else
+                return false;
         }
 
         //public void loadAnnotations(string filename);
@@ -244,7 +420,8 @@ namespace EpubReaderWithAnnotations
 
         public string GetPath(int index)
         {
-            return String.Format("file:///{0}", Path.GetFullPath(Path.Combine(_tempPath, _baseMenuXmlDiretory, _menuItems[index])));
+             string result = String.Format("file:///{0}", Path.GetFullPath(Path.Combine(_tempPath, _baseMenuXmlDiretory, _menuItems[index])));
+            return result;
         }
 
         public string getFileName(int index)
@@ -308,9 +485,32 @@ namespace EpubReaderWithAnnotations
             epubDisplay.Navigate(GetPath(i));
         }
 
-        private async void BrowseBook()
+        /*private void loadExclusions()
+        {
+            XDocument doc = XDocument.Load(currentLanguage + ".ex");
+            IEnumerable<XElement> list = doc.Root.Elements("word");
+            exclusions = new string[list.Count()];
+            int i = 0;
+            foreach (XElement el in list)
+            {
+                exclusions[i] = el.Value;
+                i++;
+            }
+        } */
+
+        private List<string> getListOfWords(XDocument doc)
+        {
+            List<string> l = doc.Descendants("word")
+                .Select(item => item.Value).
+                ToList();
+            return l;
+        }
+        
+
+        private async void BrowseBookAndSearch()
         {
             inBrowseMode = true;
+            searchOn = false;
             for (currentlyBrowsing = browsingStart; currentlyBrowsing <= browsingFinish; currentlyBrowsing++)
                 if (fullBookText[currentlyBrowsing] == null)
                 {
@@ -318,8 +518,37 @@ namespace EpubReaderWithAnnotations
                     await PageLoad();
                 }
             inBrowseMode = false;
-            NavigateToPage(_currentPage);
-            TextSearch.searchText(fullBookText, bookFileNames);
+            //NavigateToPage(_currentPage);
+            searcher.RunWorkerAsync();
+            
+        }
+
+        private SearchWindow getSearchWindow(string l)
+        {
+            SearchWindow result = new SearchWindow(l);
+            result.SearchConfirmed += (s, e) =>
+            {
+                searchItem = result.TextQuery;
+                searchOn = (searchItem != "");
+                if (searchOn)
+                    certainTextSearch(searchItem);
+                else
+                {
+                    exclusions = getListOfWords(excFile);
+                    if (searchWindow.IsNoun)
+                        exclusions.AddRange(getListOfWords(verbsFile));
+                    else
+                        exclusions.AddRange(getListOfWords(nounsFile));
+                    mainQuery = result.CertainQuery;
+                    doubtQuery = result.DoubtQuery;
+                    BrowseBookAndSearch();
+                    
+                }
+
+
+
+            };
+            return result;
         }
 
         private List<string> getTextFromPage (List<IHTMLElement> webPage)
@@ -374,9 +603,17 @@ namespace EpubReaderWithAnnotations
             //docOrg.
         }
 
+        public bool areFilesSaved()
+        {
+            return true;
+        }
+
         private void Exit_Click(object sender, RoutedEventArgs e)
         {
-            saveAnnotesToFile("kevade.xml");
+            //saveAnnotesToFile("kevade.xml");
+            nounsFile.Save(bookData[2]+".noun");
+            verbsFile.Save(bookData[2] + ".verb");
+            excFile.Save(bookData[2] + ".ex");
             Close();
         }
 
@@ -388,6 +625,15 @@ namespace EpubReaderWithAnnotations
         private void highlightRange(IHTMLTxtRange range, string color)
         {
             range.execCommand("BackColor", false, color);
+        }
+
+        private string getTrimmedSelectionText()
+        {
+           IHTMLTxtRange range = getRange();
+            if (range == null)
+                return null;
+            return (range.text).Trim();
+            
         }
 
         
@@ -422,7 +668,7 @@ namespace EpubReaderWithAnnotations
         private IHTMLTxtRange compareRanges (int elementNr, IHTMLTxtRange range)
         {
             IEnumerable<XElement> setAnnotes;
-            XElement root = bookAnnotes.Root;
+            XElement root = currentAnnotes.Root;
             IHTMLTxtRange rangeCheck = getRange();
             //int annotNr;
             string bookFile = getFileName(_currentPage);
@@ -475,11 +721,11 @@ namespace EpubReaderWithAnnotations
             List<XElement> chAnnotesList;
             string bookFile = null;
             List<XElement>[] listByChapter = new List<XElement>[num];
-            XElement root = bookAnnotes.Root;
+            XElement root = currentAnnotes.Root;
             for (int i = 0; i<num; i++)
             {
                 bookFile = getFileName(i);
-                XElement r = bookAnnotes.Root;
+                XElement r = currentAnnotes.Root;
                 chAnnotes =
                 from el in r.Elements("annotation")
                 orderby (int)el.Element("data").Element("tagelement"), (int)el.Element("data").Element("startfragment")
@@ -513,6 +759,8 @@ namespace EpubReaderWithAnnotations
             string bookFile = getFileName(_currentPage);
             int tagNr, startWord, fragmentLen;
             string text;
+            string color;
+            bool doubt;
 
             AnnotBox.Items.Clear();
             //_listBoxPrevInd = -1;
@@ -539,8 +787,20 @@ namespace EpubReaderWithAnnotations
                 range.moveEnd("word", fragmentLen);
                 range.execCommand("BackColor", false, "FFFF00"); */
                 range = getRangeFromAnnotation(el, range);
-                highlightRange(range, "FFFF00");
-                AnnotBox.Items.Add(range.text);
+                if (!isBookAnnotes && isElementDoubt(el))
+                {
+                    text = "?" + range.text;
+                    color = "0398FC";
+
+                }
+                else
+                {
+                    text = range.text;
+                    color = "FFFF00";
+                }
+                    highlightRange(range, color);
+                //AnnotBox.Items.Add(range.text);
+                AnnotBox.Items.Add(text);
 
              } 
 
@@ -577,12 +837,18 @@ namespace EpubReaderWithAnnotations
 
         }
 
-        
+        private void changeCharset(IHTMLDocument2 doc, string charset)
+        {
+            doc.charset = charset;
+            epubDisplay.Refresh();
+        }
 
         private void EpubDisplay_LoadCompleted(object sender, NavigationEventArgs e)
         {
             
             IHTMLDocument2 document = epubDisplay.Document as IHTMLDocument2;
+            if (document.charset != "utf-8")
+                changeCharset(document, "utf-8");
             int pageIndex;
             if (inBrowseMode)
                 pageIndex = currentlyBrowsing;
@@ -596,13 +862,16 @@ namespace EpubReaderWithAnnotations
                 fullBookText[pageIndex] = getTextFromPage(initialColl);
             }
             
-            if (!inBrowseMode)
+            if (!inBrowseMode&&annotationsShown)
             {
                 _listBoxPrevInd = -1;
                 markAnnotations(document);
                 _listBoxPrevInd = -1;
+                
             }
-            pageLoaded=true;
+            if (searchOn)
+                certainTextSearch(searchItem);
+            pageLoaded =true;
             
         }
 
@@ -612,11 +881,14 @@ namespace EpubReaderWithAnnotations
         {
             IHTMLTxtRange range;
             int ind = (sender as ListBox).SelectedIndex;
+            int tagId;
+            XElement el = annotesByChapter[_currentPage].ElementAt(ind);
+            tagId = (int)el.Element("data").Element("tagelement");
             if (ind > -1)
             {
-                range = getRangeFromAnnotation(annotesByChapter[_currentPage].ElementAt(ind), getRange());
+                range = getRangeFromAnnotation(el, getRange());
                 range.select();
-                initialColl[ind].scrollIntoView();
+                initialColl[tagId].scrollIntoView();
             }
 
                 /*if (_listBoxPrevInd>-1)
@@ -643,8 +915,63 @@ namespace EpubReaderWithAnnotations
 
         private void TestSearch(object sender, RoutedEventArgs e)
         {
-            BrowseBook();
-            
+            //BrowseBook();
+            searchWindow.Show(); 
+        }
+
+        private void MenuItem_Click_1(object sender, RoutedEventArgs e) //OpenAnnotation
+        {
+            OpenFileDialog openFileDialog = new OpenFileDialog();
+            openFileDialog.Filter = "XML files (*.xml)|*.xml|All files (*.*)|*.*";
+            if (openFileDialog.ShowDialog() == true)
+            {
+                string filePath = openFileDialog.FileName;
+                string fileName = Path.GetFileNameWithoutExtension(filePath);
+                currentAnnotes = XDocument.Load(filePath);
+                isBookAnnotes = checkCurrentAnnotesType();
+                annotesByChapter = divideAnnotesByChapter();
+                NavigateToPage(_currentPage);
+            }
+        }
+
+        private void AddNoun(object sender, RoutedEventArgs e)
+        {
+            addWordsToLanguageFile(nounsFile, getTrimmedSelectionText());
+        }
+
+        private void AddVerb(object sender, RoutedEventArgs e)
+        {
+            addWordsToLanguageFile(verbsFile, getTrimmedSelectionText());
+        }
+
+        private void AddExclusion(object sender, RoutedEventArgs e)
+        {
+            addWordsToLanguageFile(excFile, getTrimmedSelectionText());
+        }
+
+        private void MenuItem_Click_3(object sender, RoutedEventArgs e) //Save Annotations
+        {
+            SaveFileDialog saveFileDialog = new SaveFileDialog();
+            saveFileDialog.Filter = "XML files (*.xml)|*.xml|All files (*.*)|*.*";
+            if (saveFileDialog.ShowDialog() == true)
+            {
+                string filePath = saveFileDialog.FileName;
+                currentAnnotes.Save(filePath);
+            }
+
+        }
+
+        private void MenuItem_Click_4(object sender, RoutedEventArgs e) //Add annotes from file
+        {
+
+        }
+
+        private void MenuItem_Click_2(object sender, RoutedEventArgs e) //Show Hide Marks
+        {
+            annotationsShown = !annotationsShown;
+            if (!annotationsShown)
+                AnnotBox.Items.Clear();
+            NavigateToPage(_currentPage);
         }
     }
 }
